@@ -1,0 +1,63 @@
+=== GSEA Analysis Summary Report ===
+
+Total Analyses Performed: 6
+Total Significant Pathways: 460
+Unique Pathways: 263
+
+Pathways by Comparison:
+
+COVID_Critical     COVID_Mild   COVID_Severe 
+           148            132            180 
+
+Pathways by Gene Set Type:
+
+Hallmark Reactome 
+      88      372 
+
+Direction of Enrichment:
+Upregulated pathways (NES > 0): 389
+Downregulated pathways (NES < 0): 71
+
+Top 10 Most Significantly Enriched Pathways:
+                                                                     Description Comparison
+COVID_Mild_Hallmark.1                           HALLMARK_TNFA_SIGNALING_VIA_NFKB COVID_Mild
+COVID_Mild_Hallmark.2                         HALLMARK_INTERFERON_GAMMA_RESPONSE COVID_Mild
+COVID_Mild_Hallmark.3                             HALLMARK_INFLAMMATORY_RESPONSE COVID_Mild
+COVID_Mild_Hallmark.4                         HALLMARK_INTERFERON_ALPHA_RESPONSE COVID_Mild
+COVID_Mild_Hallmark.5                                        HALLMARK_COMPLEMENT COVID_Mild
+COVID_Mild_Hallmark.6                                           HALLMARK_HYPOXIA COVID_Mild
+COVID_Mild_Hallmark.7                                  HALLMARK_MTORC1_SIGNALING COVID_Mild
+COVID_Mild_Reactome.1                 REACTOME_EUKARYOTIC_TRANSLATION_ELONGATION COVID_Mild
+COVID_Mild_Reactome.2                       REACTOME_SELENOAMINO_ACID_METABOLISM COVID_Mild
+COVID_Mild_Reactome.3 REACTOME_RESPONSE_OF_EIF2AK4_GCN2_TO_AMINO_ACID_DEFICIENCY COVID_Mild
+                            NES pvalue
+COVID_Mild_Hallmark.1  3.447951  1e-10
+COVID_Mild_Hallmark.2  3.247594  1e-10
+COVID_Mild_Hallmark.3  3.195211  1e-10
+COVID_Mild_Hallmark.4  3.037974  1e-10
+COVID_Mild_Hallmark.5  2.326134  1e-10
+COVID_Mild_Hallmark.6  2.273748  1e-10
+COVID_Mild_Hallmark.7  2.225292  1e-10
+COVID_Mild_Reactome.1 -3.466507  1e-10
+COVID_Mild_Reactome.2 -3.308341  1e-10
+COVID_Mild_Reactome.3 -3.292012  1e-10
+
+Files Generated:
+- key_pathways_across_severities.csv
+- immune_inflammatory_pathways.csv
+- pathway_progression_analysis.csv
+- specific_pathway_category_files.csv
+- Various visualization plots (.png files)
+
+Key Findings:
+1. Review the immune_pathways_heatmap.png to see immune response patterns
+2. Check pathway_progression_plot.png to understand disease progression
+3. Examine covid_pathway_categories.png for COVID-specific pathway analysis
+4. Use key_pathways_barplot.png to identify consistently altered pathways
+
+Recommendations:
+1. Focus on pathways with |NES| > 1.5 and p.adjust < 0.05
+2. Prioritize immune and inflammatory pathways for further validation
+3. Consider pathways that show consistent direction across severities
+4. Investigate pathways unique to severe/critical COVID cases
+
