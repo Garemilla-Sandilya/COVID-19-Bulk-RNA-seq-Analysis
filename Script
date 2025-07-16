@@ -1,0 +1,1210 @@
+```R
+
+# Simple Bulk RNA-seq Analysis - No Metadata Required
+# This script analyzes your count data without needing metadata
+
+# Required Libraries
+library(DESeq2)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(pheatmap)
+library(ggplot2)
+library(tidyverse)
+library(plotly)
+
+# 1. SETUP AND DATA LOADING
+# Set working directory (modify as needed)
+setwd("C:/Users/sandi/Projects/Bulk_RNA")
+
+# Create output directories
+dir.create("Results", showWarnings = FALSE)
+outdir <- "Results/GSE293708_Simple_Analysis"
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+
+cat("=== Loading Count Data ===\n")
+
+# Load count matrix
+counts_raw <- read.table("GSE293708_raw_counts.tsv", header = TRUE, sep = "\t")
+
+# Handle duplicate gene names
+gene_names <- counts_raw[, 1]
+gene_names <- make.unique(as.character(gene_names))
+rownames(counts_raw) <- gene_names
+count_matrix <- counts_raw[, -1]  # Remove gene name column
+
+cat("Data loaded successfully!\n")
+cat("Genes:", nrow(count_matrix), "\n")
+cat("Samples:", ncol(count_matrix), "\n")
+
+# Show sample names
+cat("\nSample names:\n")
+print(colnames(count_matrix))
+
+# 2. DATA PREPROCESSING
+
+cat("\n=== Data Preprocessing ===\n")
+
+# Filter out low-expressed genes (keep genes with ≥10 counts total)
+keep <- rowSums(count_matrix) >= 10
+count_matrix_filtered <- count_matrix[keep, ]
+
+cat("Original genes:", nrow(count_matrix), "\n")
+cat("Filtered genes:", nrow(count_matrix_filtered), "\n")
+
+# Create a simple sample information dataframe
+# Create samples data frame with proper condition assignment
+samples <- data.frame(
+  SampleID = colnames(count_matrix_filtered),
+  Condition = "unknown",  # Initialize all as unknown
+  stringsAsFactors = FALSE
+)
+
+# Assign conditions based on sample ID prefixes
+samples$Condition <- ifelse(grepl("^H[1-4]$", samples$SampleID), "Normal",
+                            ifelse(grepl("^CM[1-4]$", samples$SampleID), "COVID-19_Mild",
+                                   ifelse(grepl("^CS[1-4]$", samples$SampleID), "COVID-19_Severe",
+                                          ifelse(grepl("^CI[1-4]$", samples$SampleID), "COVID-19_Critical",
+                                                 "unknown"))))
+
+# Alternative approach using a more explicit method:
+# samples$Condition[samples$SampleID %in% c("H1", "H2", "H3", "H4")] <- "Normal"
+# samples$Condition[samples$SampleID %in% c("CM1", "CM2", "CM3", "CM4")] <- "COVID-19_Mild"
+# samples$Condition[samples$SampleID %in% c("CS1", "CS2", "CS3", "CS4")] <- "COVID-19_Severe"
+# samples$Condition[samples$SampleID %in% c("CI1", "CI2", "CI3", "CI4")] <- "COVID-19_Critical"
+
+# Convert Condition to factor for better handling in downstream analysis
+samples$Condition <- factor(samples$Condition, 
+                            levels = c("Normal", "COVID-19_Mild", "COVID-19_Severe", "COVID-19_Critical"))
+
+# Display the results
+print(samples)
+
+# Verify the assignment
+table(samples$Condition)
+rownames(samples) <- samples$SampleID
+
+# 3. NORMALIZATION
+
+cat("\n=== Normalizing Counts ===\n")
+
+# Create DESeq2 object (using ~ 1 since we don't have conditions yet)
+dds <- DESeqDataSetFromMatrix(
+  countData = count_matrix_filtered,
+  colData = samples,
+  design = ~ 1  # No experimental design
+)
+
+# Estimate size factors for normalization
+dds <- estimateSizeFactors(dds)
+
+# Get normalized counts
+norm_counts <- counts(dds, normalized = TRUE)
+
+# 4. GENE ANNOTATION
+
+cat("\n=== Annotating Genes ===\n")
+
+genes <- rownames(norm_counts)
+
+# Convert gene IDs to symbols
+if(grepl("^ENS", genes[1])) {
+  gene_symbols <- mapIds(org.Hs.eg.db, genes, "SYMBOL", "ENSEMBL")
+  cat("Detected ENSEMBL gene IDs\n")
+} else if(grepl("^[0-9]+$", genes[1])) {
+  gene_symbols <- mapIds(org.Hs.eg.db, genes, "SYMBOL", "ENTREZID")
+  cat("Detected Entrez gene IDs\n")
+} else {
+  gene_symbols <- genes
+  cat("Detected gene symbols\n")
+}
+
+# Create annotated count matrix
+annCount <- data.frame(
+  geneID = genes,
+  Symbol = ifelse(is.na(gene_symbols), genes, gene_symbols),
+  norm_counts
+)
+
+# Save normalized counts
+write.csv(annCount, file.path(outdir, "normalized_counts.csv"), row.names = TRUE)
+cat("Normalized counts saved!\n")
+
+# 5. QUALITY CONTROL ANALYSIS
+
+cat("\n=== Quality Control Analysis ===\n")
+
+# Variance stabilizing transformation
+vst_counts <- vst(dds, blind = TRUE)
+
+# PCA Analysis
+pca_data <- plotPCA(vst_counts, intgroup=c("Condition", "SampleID"), returnData = TRUE)
+percentVar <- round(100 * attr(pca_data, "percentVar"))
+
+
+# Create the PCA plot
+pca_plot <- ggplot(pca_data, aes(PC1, PC2, color=Condition)) +
+  geom_point(size=18) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  theme(
+    axis.title.x = element_text(size = 20, family = 'calibri', face = 'bold'),
+    axis.title.y = element_text(size = 20, family = 'calibri', face = 'bold'),
+    axis.text.x = element_text(size = 15, family = 'calibri'),
+    axis.text.y = element_text(size = 15, family = 'calibri'),
+    legend.text = element_text(size = 15, family = 'calibri'),
+    legend.title = element_text(size = 15, family = 'calibri', face = 'bold')
+  ) + 
+  scale_color_manual(breaks = c("Normal", "COVID-19_Mild", "COVID-19_Severe", "COVID-19_Critical"),
+                     values=c("blue", "green", "orange", "red")) + 
+  geom_text(aes(label=SampleID), hjust= 1.2, size =5)
+
+# Display the plot
+print(pca_plot)
+
+# Alternative color scheme option:
+# scale_color_manual(breaks = c("Normal", "COVID-19_Mild", "COVID-19_Severe", "COVID-19_Critical"),
+#                    values=c("steelblue", "forestgreen", "darkorange", "firebrick3"))
+
+# If you want to add a title:
+# pca_plot <- pca_plot + ggtitle("Principal Component Analysis - COVID-19 Samples") +
+#   theme(plot.title = element_text(size = 35, family = 'calibri', face = 'bold', hjust = 0.5))
+
+
+ggsave(file.path(outdir, "PCA_plot.png"), pca_plot, width = 10, height = 8)
+
+# Sample correlation heatmap
+# Load required library
+library(pheatmap)
+library(RColorBrewer)
+
+# Calculate sample correlation matrix
+sample_cor <- cor(assay(vst_counts))
+
+# Create annotation for samples based on conditions
+annotation_col <- data.frame(
+  Condition = samples$Condition,
+  row.names = samples$SampleID
+)
+
+# Define colors for conditions
+condition_colors <- list(
+  Condition = c("Normal" = "steelblue", 
+                "COVID-19_Mild" = "forestgreen", 
+                "COVID-19_Severe" = "darkorange", 
+                "COVID-19_Critical" = "firebrick3")
+)
+
+# Create and display the heatmap (same as PCA plot approach)
+heatmap_plot <- pheatmap(
+  sample_cor,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  annotation_col = annotation_col,
+  annotation_row = annotation_col,
+  annotation_colors = condition_colors,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  main = "Sample Correlation Heatmap",
+  fontsize = 12,
+  fontsize_row = 10,
+  fontsize_col = 10,
+  angle_col = 45,
+  border_color = "grey60",
+  cellwidth = 30,
+  cellheight = 30
+)
+
+# Save the heatmap using ggsave (same as PCA plot)
+ggsave(
+  filename = file.path(outdir, "sample_correlation_heatmap.png"),
+  plot = heatmap_plot,
+  width = 12,
+  height = 10,
+  dpi = 300,
+  units = "in"
+)
+
+# Alternative: Save directly with pheatmap's filename parameter
+# pheatmap(
+#   sample_cor,
+#   cluster_rows = TRUE,
+#   cluster_cols = TRUE,
+#   show_rownames = TRUE,
+#   show_colnames = TRUE,
+#   annotation_col = annotation_col,
+#   annotation_row = annotation_col,
+#   annotation_colors = condition_colors,
+#   color = colorRampPalette(c("blue", "white", "red"))(100),
+#   main = "Sample Correlation Heatmap",
+#   fontsize = 12,
+#   fontsize_row = 10,
+#   fontsize_col = 10,
+#   angle_col = 45,
+#   border_color = "grey60",
+#   cellwidth = 30,
+#   cellheight = 30,
+#   filename = file.path(outdir, "sample_correlation_heatmap.png"),
+#   width = 12,
+#   height = 10,
+#   dpi = 300
+# )
+
+# Alternative color schemes you can try:
+# Color option 1: Blue-Red spectrum
+# color = colorRampPalette(c("navy", "white", "darkred"))(100)
+
+# Color option 2: Using RColorBrewer
+# color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(100)
+
+# Color option 3: Viridis-like
+# color = colorRampPalette(c("#440154", "#31688E", "#35B779", "#FDE725"))(100)
+
+# Print correlation statistics
+cat("Correlation Matrix Summary:\n")
+cat("Min correlation:", round(min(sample_cor), 3), "\n")
+cat("Max correlation:", round(max(sample_cor), 3), "\n")
+cat("Mean correlation:", round(mean(sample_cor[upper.tri(sample_cor)]), 3), "\n")
+
+# Save correlation matrix as CSV for further analysis
+write.csv(sample_cor, file.path(outdir, "sample_correlation_matrix.csv"))
+
+print("Heatmap saved successfully!")
+
+# 6. EXPLORATORY DATA ANALYSIS
+
+cat("\n=== Exploratory Data Analysis ===\n")
+
+# Top expressed genes
+top_genes <- head(order(rowMeans(norm_counts), decreasing = TRUE), 20)
+top_gene_names <- ifelse(is.na(gene_symbols[top_genes]), 
+                         rownames(norm_counts)[top_genes], 
+                         gene_symbols[top_genes])
+
+cat("Top 20 most expressed genes:\n")
+top_expressed <- data.frame(
+  Gene = top_gene_names,
+  Mean_Expression = rowMeans(norm_counts)[top_genes]
+)
+print(top_expressed)
+
+# Save top expressed genes
+write.csv(top_expressed, file.path(outdir, "top_expressed_genes.csv"), row.names = FALSE)
+
+# Heatmap of top variable genes
+top_var_genes <- head(order(apply(assay(vst_counts), 1, var), decreasing = TRUE), 50)
+heatmap_data <- assay(vst_counts)[top_var_genes, ]
+
+# Scale by row
+heatmap_data_scaled <- t(scale(t(heatmap_data)))
+
+pheatmap(
+  heatmap_data_scaled,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  main = "Top 50 Most Variable Genes",
+  filename = file.path(outdir, "top_variable_genes_heatmap.png"),
+  width = 12,
+  height = 10
+)
+
+
+# 7. SAMPLE CLUSTERING
+
+cat("\n=== Sample Clustering Analysis ===\n")
+
+# Hierarchical clustering of samples
+sample_dist <- dist(t(assay(vst_counts)))
+sample_hc <- hclust(sample_dist)
+
+# Plot dendrogram
+png(file.path(outdir, "sample_dendrogram.png"), width = 800, height = 600)
+plot(sample_hc, main = "Sample Clustering Dendrogram", xlab = "Samples", ylab = "Distance")
+dev.off()
+
+# 8. BASIC STATISTICS
+
+cat("\n=== Basic Statistics ===\n")
+
+# Calculate basic statistics
+total_counts_per_sample <- colSums(count_matrix_filtered)
+genes_detected_per_sample <- colSums(count_matrix_filtered > 0)
+
+stats_summary <- data.frame(
+  Sample = names(total_counts_per_sample),
+  Total_Counts = total_counts_per_sample,
+  Genes_Detected = genes_detected_per_sample,
+  Mean_Expression = colMeans(norm_counts)
+)
+
+print(stats_summary)
+write.csv(stats_summary, file.path(outdir, "sample_statistics.csv"), row.names = FALSE)
+
+# Create summary plots
+# Total counts per sample
+counts_plot <- ggplot(stats_summary, aes(x = Sample, y = Total_Counts)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Total Counts per Sample") +
+  ylab("Total Counts")
+
+ggsave(file.path(outdir, "total_counts_per_sample.png"), counts_plot, width = 10, height = 6)
+
+# Genes detected per sample
+genes_plot <- ggplot(stats_summary, aes(x = Sample, y = Genes_Detected)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Genes Detected per Sample") +
+  ylab("Number of Genes")
+
+ggsave(file.path(outdir, "genes_detected_per_sample.png"), genes_plot, width = 10, height = 6)
+
+# Set rownames
+rownames(metadata) <- metadata$Run
+
+# Check column you want to use for condition
+table(metadata$disease_state)  # or metadata$source_name, etc.
+
+# 10. DIFFERENTIAL EXPRESSION ANALYSIS FOR GSEA
+
+cat("\n=== Differential Expression Analysis for GSEA ===\n")
+
+# Create DESeq2 object with proper design for differential analysis
+dds_de <- DESeqDataSetFromMatrix(
+  countData = count_matrix_filtered,
+  colData = samples,
+  design = ~ Condition
+)
+
+# Run DESeq2 analysis
+dds_de <- DESeq(dds_de)
+
+# Get results for different comparisons
+# 1. COVID_Severe vs Normal
+res_severe <- results(dds_de, contrast = c("Condition", "COVID-19_Severe", "Normal"))
+res_severe <- res_severe[order(res_severe$padj), ]
+
+# 2. COVID_Critical vs Normal  
+res_critical <- results(dds_de, contrast = c("Condition", "COVID-19_Critical", "Normal"))
+res_critical <- res_critical[order(res_critical$padj), ]
+
+# 3. COVID_Mild vs Normal
+res_mild <- results(dds_de, contrast = c("Condition", "COVID-19_Mild", "Normal"))
+res_mild <- res_mild[order(res_mild$padj), ]
+
+# Summary of results
+cat("Differential Expression Results:\n")
+cat("COVID_Severe vs Normal - DEGs (padj < 0.05):", sum(res_severe$padj < 0.05, na.rm = TRUE), "\n")
+cat("COVID_Critical vs Normal - DEGs (padj < 0.05):", sum(res_critical$padj < 0.05, na.rm = TRUE), "\n")
+cat("COVID_Mild vs Normal - DEGs (padj < 0.05):", sum(res_mild$padj < 0.05, na.rm = TRUE), "\n")
+
+
+# 11. PREPARE DATA FOR GSEA
+
+cat("\n=== Preparing Data for GSEA ===\n")
+
+# Install and load required packages for GSEA
+if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+  BiocManager::install("clusterProfiler")
+}
+if (!requireNamespace("msigdbr", quietly = TRUE)) {
+  install.packages("msigdbr")
+}
+if (!requireNamespace("enrichplot", quietly = TRUE)) {
+  BiocManager::install("enrichplot")
+}
+
+library(clusterProfiler)
+library(msigdbr)
+library(enrichplot)
+
+# Function to prepare gene list for GSEA
+prepare_gsea_list <- function(res_df) {
+  # Remove rows with NA values
+  res_clean <- res_df[!is.na(res_df$stat), ]
+  
+  # Get gene symbols
+  genes <- rownames(res_clean)
+  
+  # Convert gene IDs to symbols if needed
+  if(grepl("^ENS", genes[1])) {
+    gene_symbols <- mapIds(org.Hs.eg.db, genes, "SYMBOL", "ENSEMBL")
+  } else if(grepl("^[0-9]+$", genes[1])) {
+    gene_symbols <- mapIds(org.Hs.eg.db, genes, "SYMBOL", "ENTREZID")
+  } else {
+    gene_symbols <- genes
+  }
+  
+  # Create ranked gene list based on stat (t-statistic)
+  gene_list <- res_clean$stat
+  names(gene_list) <- ifelse(is.na(gene_symbols), genes, gene_symbols)
+  
+  # Remove duplicates by keeping the one with highest absolute stat value
+  gene_list <- gene_list[!duplicated(names(gene_list)) | duplicated(names(gene_list), fromLast = TRUE)]
+  gene_list <- gene_list[order(gene_list, decreasing = TRUE)]
+  
+  return(gene_list)
+}
+
+# Prepare gene lists for GSEA
+gene_list_severe <- prepare_gsea_list(res_severe)
+gene_list_critical <- prepare_gsea_list(res_critical)
+gene_list_mild <- prepare_gsea_list(res_mild)
+
+cat("Gene lists prepared for GSEA:\n")
+cat("Severe:", length(gene_list_severe), "genes\n")
+cat("Critical:", length(gene_list_critical), "genes\n")
+cat("Mild:", length(gene_list_mild), "genes\n")
+
+# 12. LOAD GENE SETS FROM MSigDB
+
+cat("\n=== Loading Gene Sets from MSigDB ===\n")
+
+# Get different gene set collections
+# Hallmark gene sets
+hallmark_sets <- msigdbr(species = "Homo sapiens", category = "H")
+hallmark_list <- split(hallmark_sets$gene_symbol, hallmark_sets$gs_name)
+
+# GO Biological Process
+go_bp_sets <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP")
+go_bp_list <- split(go_bp_sets$gene_symbol, go_bp_sets$gs_name)
+
+# Reactome pathways
+reactome_sets <- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+reactome_list <- split(reactome_sets$gene_symbol, reactome_sets$gs_name)
+
+cat("Gene sets loaded:\n")
+cat("Hallmark:", length(hallmark_list), "gene sets\n")
+cat("GO BP:", length(go_bp_list), "gene sets\n"
+cat("Reactome:", length(reactome_list), "gene sets\n")
+
+# 13. PERFORM GSEA ANALYSIS
+
+cat("\n=== Performing GSEA Analysis ===\n")
+
+# Function to run GSEA
+run_gsea <- function(gene_list, gene_sets, set_name) {
+  cat("Running GSEA for", set_name, "...\n")
+  
+  gsea_result <- GSEA(
+    geneList = gene_list,
+    TERM2GENE = data.frame(
+      term = rep(names(gene_sets), lengths(gene_sets)),
+      gene = unlist(gene_sets)
+    ),
+    minGSSize = 10,
+    maxGSSize = 500,
+    pvalueCutoff = 0.05,
+    pAdjustMethod = "BH",
+    verbose = FALSE
+  )
+  
+  return(gsea_result)
+}
+
+# Run GSEA for COVID_Severe vs Normal
+cat("\n--- COVID_Severe vs Normal ---\n")
+gsea_severe_hallmark <- run_gsea(gene_list_severe, hallmark_list, "Hallmark")
+gsea_severe_BP <- run_gsea(gene_list_severe, go_bp_list, "GO:BP")
+gsea_severe_reactome <- run_gsea(gene_list_severe, reactome_list, "Reactome")
+
+# Run GSEA for COVID_Critical vs Normal
+cat("\n--- COVID_Critical vs Normal ---\n")
+gsea_critical_hallmark <- run_gsea(gene_list_critical, hallmark_list, "Hallmark")
+gsea_critical_BP <- run_gsea(gene_list_critical, go_bp_list, "GO:BP")
+gsea_critical_reactome <- run_gsea(gene_list_critical, reactome_list, "Reactome")
+
+# Run GSEA for COVID_Mild vs Normal
+cat("\n--- COVID_Mild vs Normal ---\n")
+gsea_mild_hallmark <- run_gsea(gene_list_mild, hallmark_list, "Hallmark")
+gsea_mild_BP <- run_gsea(gene_list_mild, go_bp_list, "GO:BP")
+gsea_mild_reactome <- run_gsea(gene_list_mild, reactome_list, "Reactome")
+
+# 14. VISUALIZE GSEA RESULTS
+
+cat("\n=== Creating GSEA Visualizations ===\n")
+
+# Function to create GSEA plots
+create_gsea_plots <- function(gsea_result, comparison_name, gene_set_name) {
+  if (nrow(gsea_result) > 0) {
+    # Dotplot
+    p1 <- dotplot(gsea_result, showCategory = 15, title = paste(comparison_name, "-", gene_set_name, "GSEA"))
+    ggsave(file.path(outdir, paste0("gsea_dotplot_", comparison_name, "_", gene_set_name, ".png")), 
+           p1, width = 12, height = 8)
+    
+    # Enrichment map (if enough terms)
+    if (nrow(gsea_result) > 5) {
+      # Try emapplot with different parameters based on enrichplot version
+      tryCatch({
+        p2 <- emapplot(gsea_result, showCategory = 15)
+        ggsave(file.path(outdir, paste0("gsea_emapplot_", comparison_name, "_", gene_set_name, ".png")), 
+               p2, width = 12, height = 10)
+      }, error = function(e) {
+        cat("Emapplot failed for", comparison_name, "-", gene_set_name, ". Skipping...\n")
+      })
+    }
+    
+    # Ridge plot
+    p3 <- ridgeplot(gsea_result, showCategory = 15) + 
+      ggtitle(paste(comparison_name, "-", gene_set_name, "GSEA Ridge Plot"))
+    ggsave(file.path(outdir, paste0("gsea_ridgeplot_", comparison_name, "_", gene_set_name, ".png")), 
+           p3, width = 12, height = 8)
+    
+    # GSEA plot for top enriched pathway
+    if (nrow(gsea_result) > 0) {
+      top_pathway <- gsea_result$ID[1]
+      p4 <- gseaplot2(gsea_result, geneSetID = top_pathway, 
+                      title = paste("Top pathway:", gsea_result$Description[1]))
+      ggsave(file.path(outdir, paste0("gsea_pathway_", comparison_name, "_", gene_set_name, "_top.png")), 
+             p4, width = 12, height = 8)
+    }
+    
+    cat("Plots created for", comparison_name, "-", gene_set_name, "\n")
+  } else {
+    cat("No significant pathways found for", comparison_name, "-", gene_set_name, "\n")
+  }
+}
+
+# Create plots for all comparisons
+# COVID_Severe
+create_gsea_plots(gsea_severe_hallmark, "COVID_Severe", "Hallmark")
+create_gsea_plots(gsea_severe_BP, "COVID_Severe", "GO:BP")
+create_gsea_plots(gsea_severe_reactome, "COVID_Severe", "Reactome")
+
+# COVID_Critical
+create_gsea_plots(gsea_critical_hallmark, "COVID_Critical", "Hallmark")
+create_gsea_plots(gsea_critical_BP, "COVID_Critical", "GO:BP")
+create_gsea_plots(gsea_critical_reactome, "COVID_Critical", "Reactome")
+
+# COVID_Mild
+create_gsea_plots(gsea_mild_hallmark, "COVID_Mild", "Hallmark")
+create_gsea_plots(gsea_mild_BP, "COVID_Mild", "GO:BP")
+create_gsea_plots(gsea_mild_reactome, "COVID_Mild", "Reactome")
+
+# 15. SAVE GSEA RESULTS
+
+cat("\n=== Saving GSEA Results ===\n")
+
+# Function to save GSEA results
+save_gsea_results <- function(gsea_result, comparison_name, gene_set_name) {
+  if (nrow(gsea_result) > 0) {
+    result_df <- as.data.frame(gsea_result)
+    write.csv(result_df, 
+              file.path(outdir, paste0("gsea_results_", comparison_name, "_", gene_set_name, ".csv")), 
+              row.names = FALSE)
+    cat("Results saved for", comparison_name, "-", gene_set_name, "\n")
+  }
+}
+
+# Save all results
+save_gsea_results(gsea_severe_hallmark, "COVID_Severe", "Hallmark")
+save_gsea_results(gsea_severe_BP, "COVID_Severe", "GO:BP")
+save_gsea_results(gsea_severe_reactome, "COVID_Severe", "Reactome")
+
+save_gsea_results(gsea_critical_hallmark, "COVID_Critical", "Hallmark")
+save_gsea_results(gsea_critical_BP, "COVID_Critical", "GO:BP")
+save_gsea_results(gsea_critical_reactome, "COVID_Critical", "Reactome")
+
+save_gsea_results(gsea_mild_hallmark, "COVID_Mild", "Hallmark")
+save_gsea_results(gsea_mild_BP, "COVID_Mild", "GO:BP")
+save_gsea_results(gsea_mild_reactome, "COVID_Mild", "Reactome")
+
+# 16. SUMMARY REPORT
+
+cat("\n=== GSEA Analysis Summary ===\n")
+
+# Function to summarize GSEA results
+summarize_gsea <- function(gsea_result, comparison_name, gene_set_name) {
+  if (nrow(gsea_result) > 0) {
+    up_reg <- sum(gsea_result$NES > 0)
+    down_reg <- sum(gsea_result$NES < 0)
+    cat(paste(comparison_name, "-", gene_set_name, ":\n"))
+    cat(paste("  Total significant pathways:", nrow(gsea_result), "\n"))
+    cat(paste("  Upregulated pathways:", up_reg, "\n"))
+    cat(paste("  Downregulated pathways:", down_reg, "\n"))
+    
+    # Show top 3 pathways
+    if (nrow(gsea_result) > 0) {
+      cat("  Top 3 pathways:\n")
+      top_3 <- head(gsea_result[order(gsea_result$pvalue), ], 3)
+      for (i in 1:nrow(top_3)) {
+        cat(paste("    ", i, ". ", top_3$Description[i], " (NES: ", 
+                  round(top_3$NES[i], 2), ", p-value: ", 
+                  format(top_3$pvalue[i], scientific = TRUE, digits = 3), ")\n"))
+      }
+    }
+    cat("\n")
+  } else {
+    cat(paste(comparison_name, "-", gene_set_name, ": No significant pathways found\n\n"))
+  }
+}
+
+# Print summary for all analyses
+summarize_gsea(gsea_severe_hallmark, "COVID_Severe", "Hallmark")
+summarize_gsea(gsea_severe_BP, "COVID_Severe", "GO:BP")
+summarize_gsea(gsea_severe_reactome, "COVID_Severe", "Reactome")
+
+summarize_gsea(gsea_critical_hallmark, "COVID_Critical", "Hallmark")
+summarize_gsea(gsea_critical_BP, "COVID_Critical", "GO:BP")
+summarize_gsea(gsea_critical_reactome, "COVID_Critical", "Reactome")
+
+summarize_gsea(gsea_mild_hallmark, "COVID_Mild", "Hallmark")
+summarize_gsea(gsea_mild_BP, "COVID_Mild", "GO:BP")
+summarize_gsea(gsea_mild_reactome, "COVID_Mild", "Reactome")
+
+# 17. CREATE COMPARISON HEATMAP
+
+cat("\n=== Creating Pathway Comparison Heatmap ===\n")
+
+# Function to create comparison matrix
+create_comparison_matrix <- function(gsea_results_list, pathway_type) {
+  # Extract significant pathways from each comparison
+  all_pathways <- unique(unlist(lapply(gsea_results_list, function(x) {
+    if (nrow(x) > 0) return(x$Description) else return(character(0))
+  })))
+  
+  if (length(all_pathways) > 0) {
+    # Create matrix
+    comparison_matrix <- matrix(0, nrow = length(all_pathways), ncol = length(gsea_results_list))
+    rownames(comparison_matrix) <- all_pathways
+    colnames(comparison_matrix) <- names(gsea_results_list)
+    
+    # Fill matrix with NES values
+    for (i in seq_along(gsea_results_list)) {
+      gsea_result <- gsea_results_list[[i]]
+      if (nrow(gsea_result) > 0) {
+        matching_pathways <- intersect(all_pathways, gsea_result$Description)
+        if (length(matching_pathways) > 0) {
+          for (pathway in matching_pathways) {
+            nes_value <- gsea_result$NES[gsea_result$Description == pathway][1]
+            comparison_matrix[pathway, i] <- nes_value
+          }
+        }
+      }
+    }
+    
+    # Create heatmap
+    if (nrow(comparison_matrix) > 1) {
+      pheatmap(
+        comparison_matrix,
+        cluster_rows = TRUE,
+        cluster_cols = FALSE,
+        show_rownames = TRUE,
+        show_colnames = TRUE,
+        color = colorRampPalette(c("blue", "white", "red"))(100),
+        main = paste("GSEA NES Comparison -", pathway_type),
+        filename = file.path(outdir, paste0("gsea_comparison_heatmap_", pathway_type, ".png")),
+        width = 12,
+        height = max(8, nrow(comparison_matrix) * 0.3),
+        fontsize_row = 8,
+        fontsize_col = 10
+      )
+      cat("Comparison heatmap created for", pathway_type, "\n")
+    }
+  }
+}
+
+# Create comparison heatmaps
+hallmark_list <- list(
+  "COVID_Mild" = gsea_mild_hallmark,
+  "COVID_Severe" = gsea_severe_hallmark,
+  "COVID_Critical" = gsea_critical_hallmark
+)
+
+go_bp_list <- list(
+  "COVID_Mild" = gsea_mild_BP,
+  "COVID_Severe" = gsea_severe_BP,
+  "COVID_Critical" = gsea_critical_BP
+)
+
+reactome_list <- list(
+  "COVID_Mild" = gsea_mild_reactome,
+  "COVID_Severe" = gsea_severe_reactome,
+  "COVID_Critical" = gsea_critical_reactome
+)
+
+create_comparison_matrix(hallmark_list, "Hallmark")
+create_comparison_matrix(go_bp_list, "GO:BP")
+create_comparison_matrix(reactome_list, "Reactome")
+
+# 18. FINAL SUMMARY
+
+cat("\n=== GSEA Analysis Complete ===\n")
+cat("Files created in", outdir, ":\n")
+cat("- GSEA result tables (.csv files)\n")
+cat("- Dotplots showing enriched pathways\n")
+cat("- Enrichment maps (emapplots)\n")
+cat("- Ridge plots showing pathway distributions\n")
+cat("- Individual pathway enrichment plots\n")
+cat("- Comparison heatmaps across COVID severities\n")
+
+cat("\nGSEA Analysis Summary:\n")
+cat("✓ Differential expression analysis completed\n")
+cat("✓ Gene lists prepared for GSEA\n")
+cat("✓ Multiple gene set collections analyzed (Hallmark, KEGG, Reactome)\n")
+cat("✓ Comprehensive visualizations created\n")
+cat("✓ Results saved in multiple formats\n")
+
+cat("\nInterpretation Guide:\n")
+cat("- NES > 0: Pathways upregulated in COVID vs Normal\n")
+cat("- NES < 0: Pathways downregulated in COVID vs Normal\n")
+cat("- Higher |NES| values indicate stronger enrichment\n")
+cat("- p.adjust < 0.05 indicates statistical significance\n")
+
+cat("\nNext Steps:\n")
+cat("1. Review the dotplots to identify key pathways\n")
+cat("2. Examine individual pathway enrichment plots\n")
+cat("3. Compare pathway activation across COVID severities\n")
+cat("4. Focus on immune-related and inflammatory pathways\n")
+cat("5. Validate findings with literature\n")
+
+cat("\nAnalysis completed successfully!\n")
+sessionInfo()
+
+	
+# GSEA Results Interpretation and Analysis
+# This script provides detailed interpretation of GSEA results
+
+# Required Libraries
+library(dplyr)
+library(ggplot2)
+library(pheatmap)
+library(RColorBrewer)
+library(tidyverse)
+library(plotly)
+library(DT)
+library(knitr)
+library(clusterProfiler)
+library(enrichplot)
+
+# 19. LOAD AND EXAMINE GSEA RESULTS
+
+cat("=== Loading GSEA Results for Detailed Analysis ===\n")
+
+# Function to load GSEA results
+load_gsea_results <- function(comparison, gene_set_type) {
+  file_path <- file.path(outdir, paste0("gsea_results_", comparison, "_", gene_set_type, ".csv"))
+  if (file.exists(file_path)) {
+    result <- read.csv(file_path)
+    result$Comparison <- comparison
+    result$GeneSetType <- gene_set_type
+    return(result)
+  } else {
+    return(NULL)
+  }
+}
+
+# Load all results
+all_results <- list()
+comparisons <- c("COVID_Mild", "COVID_Severe", "COVID_Critical")
+gene_set_types <- c("Hallmark", "BP", "Reactome")
+
+for (comp in comparisons) {
+  for (gs_type in gene_set_types) {
+    result <- load_gsea_results(comp, gs_type)
+    if (!is.null(result)) {
+      all_results[[paste(comp, gs_type, sep = "_")]] <- result
+    }
+  }
+}
+
+# Combine all results
+combined_results <- do.call(rbind, all_results)
+
+if (nrow(combined_results) > 0) {
+  cat("Total significant pathways found:", nrow(combined_results), "\n")
+  
+  # Summary by comparison
+  cat("\nPathways by comparison:\n")
+  print(table(combined_results$Comparison))
+  
+  # Summary by gene set type
+  cat("\nPathways by gene set type:\n")
+  print(table(combined_results$GeneSetType))
+} else {
+  cat("No GSEA results found. Please check if the previous analysis completed successfully.\n")
+}
+
+# 20. IDENTIFY KEY PATHWAYS ACROSS SEVERITIES
+
+cat("\n=== Identifying Key Pathways Across COVID Severities ===\n")
+
+if (nrow(combined_results) > 0) {
+  # Function to identify key pathways
+  identify_key_pathways <- function(results_df, min_comparisons = 2) {
+    # Count how many comparisons each pathway appears in
+    pathway_counts <- results_df %>%
+      group_by(Description, GeneSetType) %>%
+      summarise(
+        Comparisons = n(),
+        Mean_NES = mean(NES, na.rm = TRUE),
+        Mean_pvalue = mean(pvalue, na.rm = TRUE),
+        Comparison_List = paste(Comparison, collapse = ", "),
+        .groups = "drop"
+      ) %>%
+      filter(Comparisons >= min_comparisons) %>%
+      arrange(desc(Comparisons), desc(abs(Mean_NES)))
+    
+    return(pathway_counts)
+  }
+  
+  # Identify pathways common across severities
+  key_pathways <- identify_key_pathways(combined_results)
+  
+  if (nrow(key_pathways) > 0) {
+    cat("Key pathways found across multiple COVID severities:\n")
+    print(head(key_pathways, 20))
+    
+    # Save key pathways
+    write.csv(key_pathways, file.path(outdir, "key_pathways_across_severities.csv"), row.names = FALSE)
+    
+    # Create visualization of key pathways
+    if (nrow(key_pathways) > 0) {
+      top_key_pathways <- head(key_pathways, 15)
+      
+      p_key <- ggplot(top_key_pathways, aes(x = reorder(Description, abs(Mean_NES)), 
+                                            y = Mean_NES, fill = GeneSetType)) +
+        geom_bar(stat = "identity") +
+        coord_flip() +
+        theme_minimal() +
+        labs(title = "Top Key Pathways Across COVID Severities",
+             x = "Pathway",
+             y = "Mean NES",
+             fill = "Gene Set Type") +
+        theme(axis.text.y = element_text(size = 8),
+              plot.title = element_text(size = 14, face = "bold"))
+      
+      ggsave(file.path(outdir, "key_pathways_barplot.png"), p_key, width = 12, height = 8)
+      print(p_key)
+    }
+  } else {
+    cat("No pathways found across multiple comparisons.\n")
+  }
+}
+
+# 21. FOCUS ON IMMUNE AND INFLAMMATORY PATHWAYS
+
+cat("\n=== Focusing on Immune and Inflammatory Pathways ===\n")
+
+if (nrow(combined_results) > 0) {
+  # Define immune and inflammatory pathway keywords
+  immune_keywords <- c("IMMUNE", "INFLAMMATORY", "INTERFERON", "CYTOKINE", "CHEMOKINE", 
+                       "INTERLEUKIN", "TNF", "COMPLEMENT", "INNATE", "ADAPTIVE", 
+                       "T_CELL", "B_CELL", "MACROPHAGE", "NEUTROPHIL", "NK_CELL",
+                       "ANTIGEN", "ANTIBODY", "IMMUNOGLOBULIN", "TOLL_LIKE",
+                       "INFLAMMATION", "IMMUNE_RESPONSE", "DEFENSE_RESPONSE",
+                       "LEUKOCYTE", "LYMPHOCYTE", "MONOCYTE", "DENDRITIC")
+  
+  # Filter for immune-related pathways
+  immune_pathways <- combined_results %>%
+    filter(grepl(paste(immune_keywords, collapse = "|"), Description, ignore.case = TRUE)) %>%
+    arrange(desc(abs(NES)))
+  
+  if (nrow(immune_pathways) > 0) {
+    cat("Immune-related pathways found:", nrow(immune_pathways), "\n")
+    
+    # Show top immune pathways
+    cat("\nTop immune-related pathways:\n")
+    top_immune <- immune_pathways %>%
+      select(Description, Comparison, GeneSetType, NES, pvalue, p.adjust) %>%
+      head(20)
+    print(top_immune)
+    
+    # Save immune pathways
+    write.csv(immune_pathways, file.path(outdir, "immune_inflammatory_pathways.csv"), row.names = FALSE)
+    
+    # Create immune pathway heatmap
+    immune_matrix <- immune_pathways %>%
+      select(Description, Comparison, NES) %>%
+      pivot_wider(names_from = Comparison, values_from = NES, values_fill = 0) %>%
+      column_to_rownames("Description") %>%
+      as.matrix()
+    
+    if (nrow(immune_matrix) > 1) {
+      pheatmap(
+        immune_matrix,
+        cluster_rows = TRUE,
+        cluster_cols = FALSE,
+        show_rownames = TRUE,
+        show_colnames = TRUE,
+        color = colorRampPalette(c("blue", "white", "red"))(100),
+        main = "Immune/Inflammatory Pathways Across COVID Severities",
+        filename = file.path(outdir, "immune_pathways_heatmap.png"),
+        width = 12,
+        height = max(8, nrow(immune_matrix) * 0.25),
+        fontsize_row = 8,
+        fontsize_col = 10,
+        breaks = seq(-3, 3, length.out = 101)
+      )
+    }
+    
+    # Create immune pathway comparison plot
+    immune_comparison <- ggplot(immune_pathways, aes(x = Comparison, y = NES, fill = Comparison)) +
+      geom_boxplot(alpha = 0.7) +
+      geom_jitter(width = 0.2, alpha = 0.5) +
+      theme_minimal() +
+      labs(title = "Distribution of Immune Pathway NES Across COVID Severities",
+           x = "COVID Severity",
+           y = "Normalized Enrichment Score (NES)") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            plot.title = element_text(size = 14, face = "bold")) +
+      scale_fill_manual(values = c("COVID_Mild" = "lightblue", 
+                                   "COVID_Severe" = "orange", 
+                                   "COVID_Critical" = "red"))
+    
+    ggsave(file.path(outdir, "immune_pathways_comparison.png"), immune_comparison, width = 10, height = 6)
+    print(immune_comparison)
+    
+  } else {
+    cat("No immune-related pathways found.\n")
+  }
+}
+
+# 22. PATHWAY PROGRESSION ANALYSIS
+
+cat("\n=== Analyzing Pathway Progression Across COVID Severities ===\n")
+
+if (nrow(combined_results) > 0) {
+  # Function to analyze pathway progression
+  analyze_progression <- function(results_df) {
+    # Get pathways that appear in all three severities
+    pathway_progression <- results_df %>%
+      group_by(Description, GeneSetType) %>%
+      filter(n() == 3) %>%  # Appears in all three comparisons
+      arrange(Description, factor(Comparison, levels = c("COVID_Mild", "COVID_Severe", "COVID_Critical"))) %>%
+      select(Description, GeneSetType, Comparison, NES, pvalue, p.adjust)
+    
+    return(pathway_progression)
+  }
+  
+  progression_pathways <- analyze_progression(combined_results)
+  
+  if (nrow(progression_pathways) > 0) {
+    cat("Pathways showing progression across all COVID severities:", 
+        length(unique(progression_pathways$Description)), "\n")
+    
+    # Calculate progression metrics
+    progression_metrics <- progression_pathways %>%
+      group_by(Description, GeneSetType) %>%
+      summarise(
+        Mild_NES = NES[Comparison == "COVID_Mild"],
+        Severe_NES = NES[Comparison == "COVID_Severe"],
+        Critical_NES = NES[Comparison == "COVID_Critical"],
+        Progression_Slope = (Critical_NES - Mild_NES) / 2,
+        Max_NES = max(abs(NES)),
+        Direction = ifelse(mean(NES) > 0, "Upregulated", "Downregulated"),
+        .groups = "drop"
+      ) %>%
+      arrange(desc(abs(Progression_Slope)))
+    
+    cat("\nTop pathways with strongest progression:\n")
+    print(head(progression_metrics, 15))
+    
+    # Save progression analysis
+    write.csv(progression_metrics, file.path(outdir, "pathway_progression_analysis.csv"), row.names = FALSE)
+    
+    # Create progression plot
+    top_progression <- head(progression_metrics, 12)
+    
+    if (nrow(top_progression) > 0) {
+      # Reshape data for plotting
+      progression_long <- progression_pathways %>%
+        filter(Description %in% top_progression$Description) %>%
+        mutate(Severity_Order = factor(Comparison, levels = c("COVID_Mild", "COVID_Severe", "COVID_Critical")))
+      
+      p_progression <- ggplot(progression_long, aes(x = Severity_Order, y = NES, 
+                                                    group = Description, color = GeneSetType)) +
+        geom_line(alpha = 0.7) +
+        geom_point(size = 2) +
+        facet_wrap(~ Description, scales = "free_y", ncol = 3) +
+        theme_minimal() +
+        labs(title = "Pathway Progression Across COVID Severities",
+             x = "COVID Severity",
+             y = "Normalized Enrichment Score (NES)",
+             color = "Gene Set Type") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              plot.title = element_text(size = 14, face = "bold"),
+              strip.text = element_text(size = 8))
+      
+      ggsave(file.path(outdir, "pathway_progression_plot.png"), p_progression, width = 15, height = 10)
+      print(p_progression)
+    }
+  } else {
+    cat("No pathways found across all three severities.\n")
+  }
+}
+
+# 23. SPECIFIC PATHWAY ANALYSIS
+
+cat("\n=== Specific Pathway Deep Dive ===\n")
+
+if (nrow(combined_results) > 0) {
+  # Function to analyze specific pathways of interest
+  analyze_specific_pathways <- function(results_df, pathway_keywords) {
+    specific_pathways <- results_df %>%
+      filter(grepl(paste(pathway_keywords, collapse = "|"), Description, ignore.case = TRUE)) %>%
+      arrange(desc(abs(NES)))
+    
+    return(specific_pathways)
+  }
+  
+  # Analyze key COVID-relevant pathways
+  covid_pathways <- list(
+    "Interferon" = c("INTERFERON", "IFN"),
+    "Cytokine_Storm" = c("CYTOKINE", "INTERLEUKIN", "TNF", "INFLAMMATORY"),
+    "Complement" = c("COMPLEMENT"),
+    "Coagulation" = c("COAGULATION", "HEMOSTASIS", "THROMBOSIS"),
+    "Hypoxia" = c("HYPOXIA", "OXYGEN"),
+    "Apoptosis" = c("APOPTOSIS", "CELL_DEATH"),
+    "Viral_Response" = c("VIRAL", "ANTIVIRAL", "VIRUS")
+  )
+  
+  pathway_analysis <- list()
+  
+  for (pathway_type in names(covid_pathways)) {
+    cat(paste("\n--- Analyzing", pathway_type, "pathways ---\n"))
+    
+    specific_results <- analyze_specific_pathways(combined_results, covid_pathways[[pathway_type]])
+    
+    if (nrow(specific_results) > 0) {
+      cat("Found", nrow(specific_results), "pathways\n")
+      pathway_analysis[[pathway_type]] <- specific_results
+      
+      # Print top pathways
+      cat("Top pathways:\n")
+      print(head(specific_results[, c("Description", "Comparison", "NES", "pvalue")], 10))
+      
+      # Save specific pathway results
+      write.csv(specific_results, 
+                file.path(outdir, paste0("specific_", tolower(pathway_type), "_pathways.csv")), 
+                row.names = FALSE)
+    } else {
+      cat("No pathways found for", pathway_type, "\n")
+    }
+  }
+  
+  # Create summary plot for specific pathways
+  if (length(pathway_analysis) > 0) {
+    # Combine all specific pathway results
+    specific_combined <- do.call(rbind, lapply(names(pathway_analysis), function(x) {
+      df <- pathway_analysis[[x]]
+      df$Pathway_Category <- x
+      return(df)
+    }))
+    
+    # Create category comparison plot
+    category_plot <- ggplot(specific_combined, aes(x = Pathway_Category, y = NES, fill = Comparison)) +
+      geom_boxplot(alpha = 0.7) +
+      theme_minimal() +
+      labs(title = "COVID-Relevant Pathway Categories Across Severities",
+           x = "Pathway Category",
+           y = "Normalized Enrichment Score (NES)",
+           fill = "COVID Severity") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1),
+            plot.title = element_text(size = 14, face = "bold")) +
+      scale_fill_manual(values = c("COVID_Mild" = "lightblue", 
+                                   "COVID_Severe" = "orange", 
+                                   "COVID_Critical" = "red"))
+    
+    ggsave(file.path(outdir, "covid_pathway_categories.png"), category_plot, width = 12, height = 8)
+    print(category_plot)
+  }
+}
+
+# 24. GENERATE COMPREHENSIVE REPORT
+
+cat("\n=== Generating Comprehensive GSEA Report ===\n")
+
+# Create summary statistics
+create_summary_report <- function() {
+  if (nrow(combined_results) == 0) {
+    return("No GSEA results found to analyze.")
+  }
+  
+  report <- paste0(
+    "=== GSEA Analysis Summary Report ===\n\n",
+    "Total Analyses Performed: ", length(unique(paste(combined_results$Comparison, combined_results$GeneSetType))), "\n",
+    "Total Significant Pathways: ", nrow(combined_results), "\n",
+    "Unique Pathways: ", length(unique(combined_results$Description)), "\n\n",
+    
+    "Pathways by Comparison:\n",
+    paste(capture.output(print(table(combined_results$Comparison))), collapse = "\n"), "\n\n",
+    
+    "Pathways by Gene Set Type:\n",
+    paste(capture.output(print(table(combined_results$GeneSetType))), collapse = "\n"), "\n\n",
+    
+    "Direction of Enrichment:\n",
+    "Upregulated pathways (NES > 0): ", sum(combined_results$NES > 0), "\n",
+    "Downregulated pathways (NES < 0): ", sum(combined_results$NES < 0), "\n\n",
+    
+    "Top 10 Most Significantly Enriched Pathways:\n",
+    paste(capture.output(print(head(combined_results[order(combined_results$pvalue), 
+                                                     c("Description", "Comparison", "NES", "pvalue")], 10))), 
+          collapse = "\n"), "\n\n",
+    
+    "Files Generated:\n",
+    "- key_pathways_across_severities.csv\n",
+    "- immune_inflammatory_pathways.csv\n",
+    "- pathway_progression_analysis.csv\n",
+    "- specific_pathway_category_files.csv\n",
+    "- Various visualization plots (.png files)\n\n",
+    
+    "Key Findings:\n",
+    "1. Review the immune_pathways_heatmap.png to see immune response patterns\n",
+    "2. Check pathway_progression_plot.png to understand disease progression\n",
+    "3. Examine covid_pathway_categories.png for COVID-specific pathway analysis\n",
+    "4. Use key_pathways_barplot.png to identify consistently altered pathways\n\n",
+    
+    "Recommendations:\n",
+    "1. Focus on pathways with |NES| > 1.5 and p.adjust < 0.05\n",
+    "2. Prioritize immune and inflammatory pathways for further validation\n",
+    "3. Consider pathways that show consistent direction across severities\n",
+    "4. Investigate pathways unique to severe/critical COVID cases\n"
+  )
+  
+  return(report)
+}
+
+# Generate and save report
+summary_report <- create_summary_report()
+writeLines(summary_report, file.path(outdir, "GSEA_Analysis_Report.txt"))
+
+cat(summary_report)
+
+
+# 25. NEXT STEPS AND VALIDATION
+
+cat("\n=== Next Steps for Validation and Further Analysis ===\n")
+
+cat("1. LITERATURE VALIDATION:\n")
+cat("   - Compare findings with published COVID-19 studies\n")
+cat("   - Focus on immune response and inflammation pathways\n")
+cat("   - Look for drug targets in enriched pathways\n\n")
+
+cat("2. FUNCTIONAL VALIDATION:\n")
+cat("   - Select top pathways for experimental validation\n")
+cat("   - Consider pathway-specific assays\n")
+cat("   - Validate key genes from enriched pathways\n\n")
+
+cat("3. CLINICAL CORRELATION:\n")
+cat("   - Correlate pathway enrichment with clinical outcomes\n")
+cat("   - Identify biomarkers for disease severity\n")
+cat("   - Develop prognostic models\n\n")
+
+cat("4. DRUG DISCOVERY:\n")
+cat("   - Identify targetable pathways\n")
+cat("   - Screen for existing drugs targeting enriched pathways\n")
+cat("   - Consider combination therapies\n\n")
+
+cat("5. FURTHER BIOINFORMATICS:\n")
+cat("   - Perform network analysis of enriched pathways\n")
+cat("   - Identify pathway crosstalk\n")
+cat("   - Analyze transcription factor enrichment\n\n")
+
+cat("Analysis completed! Check the output directory for all results and visualizations.\n")
+cat("Output directory:", outdir, "\n")
+```
