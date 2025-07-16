@@ -1,6 +1,6 @@
-# COVID-19 Bulk RNA-seq Analysis Pipeline with Comprehensive GSEA
+# COVID-19 Bulk RNA-seq Analysis with Comprehensive GSEA
 
-A complete bioinformatics pipeline for analyzing bulk RNA-seq data from COVID-19 patients across different disease severities, featuring comprehensive Gene Set Enrichment Analysis (GSEA) and pathway interpretation.
+A complete bioinformatics pipeline for analysing bulk RNA-seq data from COVID-19 patients across different disease severities, featuring comprehensive Gene Set Enrichment Analysis (GSEA) and pathway interpretation.
 
 ## 🔬 Project Overview
 
